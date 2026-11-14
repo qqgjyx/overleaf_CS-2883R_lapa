@@ -72,125 +72,826 @@
   \vfill
 \end{frame}
 
-%% ---- Part A (Vivian, S1-3): problem and method, about 6:00 ----
 
-% 1. Problem  1:00  (S1, Fig. 1, abstract)
-\begin{frame}{Problem}
-  \centering
-  \paperfig{height=3.9cm}{figs/fig1_teaser.pdf}{Fig.~1}
+
+% Abstract definition: orient the audience immediately after the title.
+\begin{frame}{What is PointWorld?}
   \vfill
-  \begin{notes}[0.9\linewidth]
-    \item A \textbf{world model} for manipulation: given what the robot sees and what it
-      intends to do, predict how the scene will move
-    \item The goal here: from one RGB-D image of an unseen room, in 3D, for more than one robot
-    \item \pw{Represent the scene and the robot's action the same way, as moving 3D points,
-      and train one model on 2M trajectories}
+  \centering
+  \begin{minipage}{0.92\textwidth}
+    \large\raggedright
+    ``POINTWORLD, a \textbf{large pre-trained 3D world model} that
+    unifies \textbf{state and action} in a \textbf{shared 3D space}
+    as \textbf{3D point flows}: given one or few RGB-D images and
+    a sequence of low-level robot action commands, POINTWORLD
+    forecasts \textbf{per-pixel displacements in 3D} that respond
+    to the given actions.''
+  \end{minipage}
+  \vfill
+  \credit{Abstract; emphasis added}
+\end{frame}
+
+%% ---- Part A (Vivian): expanded introduction, method, and planning ----
+% Sources: PointWorld arXiv:2601.03782v1, Sections 1--3 and 5.2.
+% Beamer overlays reveal content on successive clicks. Original theme is unchanged.
+\newcommand{\lossmark}[3]{\ifnum#1=#2\relax{\color{orange!90!red}\setlength{\fboxrule}{2pt}\setlength{\fboxsep}{2.5pt}\boxed{\color{ink}#3}}\else#3\fi}
+\newcommand{\pwequation}[1]{%
+\[
+\mathcal L=\tfrac12\sum_{k,i}^{H,N_S}
+\lossmark{#1}{2}{w_{k,i}}
+\Big(
+\lossmark{#1}{1}{\rho_\delta(\hat{\mathbf P}_{t+k,i}-\mathbf P_{t+k,i})}
+\lossmark{#1}{3}{e^{-s_{k,i}}}
++\lossmark{#1}{4}{s_{k,i}}
+\Big).
+\]}
+% Introduction 1/3
+\begin{frame}{Context: why do robots need world models?}
+  \centering
+  \paperfig{height=3.55cm}{figs/fig1_teaser.pdf}{Fig.~1}
+  \vfill
+  \begin{notes}[0.92\linewidth]
+    \item<1-> A robot must anticipate how an action changes its surroundings before committing to it.
+    \item<2-> A \textbf{world model} predicts future scene states from the current observation and a proposed action.
+    \item<3-> \pw{Use these predictions to compare actions and plan physical interactions in unseen environments.}
   \end{notes}
   \vfill
 \end{frame}
 
-% 2. Before PointWorld  0:45  (S1, S2; seconds-long inference from S3.1)
-\begin{frame}{Before PointWorld}
-  \begin{columns}[t]
-    \column{0.31\textwidth}
-      \colhead{Physics simulators}{todorov2012mujoco}
-      \footnotesize
-      \begin{itemize}
-        \item Accurate once the scene is modelled: meshes, masses, materials
-        \item That modelling is per scene, and the sim-to-real gap remains
-      \end{itemize}
-    \column{0.31\textwidth}
-      \colhead{Learned particle dynamics}{li2018particle, ai2025review}
-      \footnotesize
-      \begin{itemize}
-        \item Learn from interaction, often as graphs over particles (GBND)
-        \item Usually scene-specific, with full observability, object or material priors
-      \end{itemize}
-    \column{0.31\textwidth}
-      \colhead{Video world models}{brooks2024sora, agarwal2025cosmos, assran2025vjepa2}
-      \footnotesize
-      \begin{itemize}
-        \item Trained at scale and look real, but physics is often off
-        \item Actions come in as text or robot commands, not geometry; seconds per prediction
-      \end{itemize}
-  \end{columns}
-  \vspace{14pt}
-  \centering\footnotesize
-  \pw{PointWorld keeps the particle view, and scales it the way video models scale}
+\newcommand{\approachcrop}[6]{%
+  \begin{tikzpicture}
+    \node[anchor=south west,inner sep=0pt] (ref) at (0,0)
+      {\phantom{\includegraphics[width=#1]{#2}}};
+    \begin{scope}[x={(ref.south east)},y={(ref.north west)}]
+      \clip (#3,#4) rectangle (#5,#6);
+      \node[anchor=south west,inner sep=0pt] at (0,0)
+        {\includegraphics[width=#1]{#2}};
+    \end{scope}
+    \pgfresetboundingbox
+    \begin{scope}[x={(ref.south east)},y={(ref.north west)}]
+      \path[use as bounding box] (#3,#4) rectangle (#5,#6);
+    \end{scope}
+  \end{tikzpicture}%
+}
+
+\begin{frame}[t]{Related work: approaches to predicting physical interactions}
+\vspace{-0.9cm}
+
+\begin{columns}[t]
+
+% ----- Physics simulators -----
+\column{0.31\textwidth}
+\uncover<1->{
+  \begin{minipage}[t][0.8cm]{\linewidth}
+    {\small\bfseries Physics simulators}\par
+  \end{minipage}\par
+
+  \begin{minipage}[c][1.95cm][c]{\linewidth}
+    \centering
+    \resizebox{!}{1.9cm}{%
+      \approachcrop{8cm}{approach_mujoco.png}
+        {0.30}{0.16}{0.72}{0.85}}
+  \end{minipage}\par
+
+  {\tiny\color{mute}
+    \href{https://mujoco.readthedocs.io/en/stable/models.html}
+      {MuJoCo Menagerie: Franka Panda}}\par
+
+  \vspace{2pt}
+  {\scriptsize
+    \begin{itemize}
+      \setlength{\itemsep}{3pt}
+      \setlength{\parskip}{0pt}
+      \setlength{\topsep}{2pt}
+      \item Simulate physical interactions using equations,
+        scene geometry, and specified physical properties.
+      \item Require scene-specific setup, and simulated
+        behavior can differ from reality.
+    \end{itemize}
+  }
+}
+
+% ----- Video generative models -----
+\column{0.31\textwidth}
+\uncover<2->{
+  \begin{minipage}[t][0.8cm]{\linewidth}
+    {\small\bfseries Video generative models}\par
+  \end{minipage}\par
+
+  \begin{minipage}[c][1.95cm][c]{\linewidth}
+    \centering
+    \resizebox{!}{1.9cm}{%
+      \approachcrop{8cm}{approach_cosmos.jpg}
+        {0.56}{0.25}{0.94}{0.82}}
+  \end{minipage}\par
+
+  {\tiny\color{mute}
+    \href{https://www.nvidia.com/en-us/ai/cosmos/}
+      {NVIDIA Cosmos: video generation}}\par
+
+  \vspace{2pt}
+  {\scriptsize
+    \begin{itemize}
+      \setlength{\itemsep}{3pt}
+      \setlength{\parskip}{0pt}
+      \setlength{\topsep}{2pt}
+      \item Learn from video data to generate videos
+        conditioned on inputs such as text or images.
+      \item Realistic appearance does not guarantee accurate
+        physics or precise robot-action control.
+    \end{itemize}
+  }
+}
+
+% ----- Learned dynamics models -----
+\column{0.31\textwidth}
+\uncover<3->{
+  \begin{minipage}[t][0.8cm]{\linewidth}
+    {\small\bfseries Learned dynamics\\models}\par
+  \end{minipage}\par
+
+  \begin{minipage}[c][1.95cm][c]{\linewidth}
+    \centering
+    \resizebox{!}{1.9cm}{%
+      \approachcrop{8cm}{approach_dreamer.png}
+        {0}{0.15}{0.51}{1}}
+  \end{minipage}\par
+
+  {\tiny\color{mute}
+    \href{https://github.com/danijar/dreamerv3}
+      {DreamerV3 (Hafner et al., 2025)}}\par
+
+  \vspace{2pt}
+  {\scriptsize
+    \begin{itemize}
+      \setlength{\itemsep}{3pt}
+      \setlength{\parskip}{0pt}
+      \setlength{\topsep}{2pt}
+      \item Learn from interaction data to predict how
+        the environment changes in response to actions.
+      \item \textbf{Example: Dreamer} encodes a game screen
+        into a latent state, then predicts how it changes
+        after an action such as ``move right.''
+    \end{itemize}
+  }
+}
+
+\end{columns}
+\vfill
 \end{frame}
 
-% 3. Method  1:30  (S3.1, Fig. 2; 300-500 gripper points from S5.2)
-\begin{frame}{Method}
-  \begin{columns}[c]
-    \column{0.40\textwidth}
+% Crops from the same example in Figure 2.
+\newcommand{\pwvisualcrop}[5]{%
+  \begin{tikzpicture}
+    \node[anchor=south west,inner sep=0pt] (ref) at (0,0)
+      {\phantom{\includegraphics[width=#1]{figs/fig2_overview.pdf}}};
+
+    \begin{scope}[x={(ref.south east)},y={(ref.north west)}]
+      \clip (#2,#3) rectangle (#4,#5);
+      \node[anchor=south west,inner sep=0pt] at (0,0)
+        {\includegraphics[width=#1]{figs/fig2_overview.pdf}};
+    \end{scope}
+
+    \pgfresetboundingbox
+    \begin{scope}[x={(ref.south east)},y={(ref.north west)}]
+      \path[use as bounding box]
+        (#2,#3) rectangle (#4,#5);
+    \end{scope}
+  \end{tikzpicture}%
+}
+
+% Motivation for the representation, before introducing the core idea.
+\begin{frame}[t]{Motivation: why use 3D point flows?}
+  \vspace{-0.2cm}
+  \footnotesize
+  \begin{itemize}\setlength{\itemsep}{12pt}
+    \item<1-> \textbf{\color{pw}Geometry for physical interaction}\\
+      3D positions directly describe distances and contact geometry,
+      rather than visual appearance alone.
+
+    \item<2-> \textbf{\color{pw}A common format across robots}\\
+      Point trajectories can describe different gripper shapes and
+      robot embodiments without a fixed, robot-specific action vector.
+
+    \item<3-> \textbf{\color{pw}Direct motion supervision}\\
+      Corresponding scene points provide displacement targets.
+
+    \item<4-> \textbf{\color{pw}Fewer required annotations}\\
+      No explicit object segmentation or material labels are required
+      as model inputs.
+  \end{itemize}
+  \vfill
+  \credit{\S1--3.1}
+\end{frame}
+
+\begin{frame}[t]{PointWorld: state and action share 3D space}
+\vspace{-0.35cm}
+\centering
+
+\begin{tikzpicture}[
+  panel/.style={
+    draw=pw,
+    rounded corners=2pt,
+    inner sep=4pt,
+    align=center
+  },
+  model/.style={
+    draw=pw,
+    thick,
+    fill=pw!8,
+    rounded corners=2pt,
+    minimum height=1cm,
+    inner sep=7pt,
+    align=center
+  }
+]
+
+% Fixed bounds prevent movement between reveals.
+\path[use as bounding box]
+  (-2.1,-2.8) rectangle (10.5,3.2);
+
+\node[font=\small\bfseries,text=pw]
+  at (0,3.0) {Inputs};
+
+% PointWorld model.
+\node[model] (pwmodel) at (4.3,0) {
+  \mbox{\small\bfseries PointWorld}
+};
+
+% Input 1: observed scene state.
+\uncover<1->{
+  \node[panel] (scene) at (0,1.45) {
+    \begin{minipage}[c][2.2cm][c]{3.6cm}
       \centering
-      \paperfig{height=5.0cm}{figs/fig2_overview.pdf}{Fig.~2}
-    \column{0.58\textwidth}
-      \footnotesize
-      \begin{itemize}\setlength{\itemsep}{5pt}
-        \item \textbf{State}: the RGB-D image back-projected to a point cloud, robot pixels
-          removed. Each point carries frozen DINOv3 features \src{simeoni2025dinov3}
-        \item \textbf{Action}: 300 to 500 points per gripper, placed by forward kinematics at
-          each of the next 10 steps and tagged with a time embedding. A Franka and a
-          two-armed humanoid are described the same way
-        \item \textbf{Model}: PTv3 \src{wu2023ptv3} reads scene and robot points as one
-          cloud; a shared head gives every scene point's displacement at all 10 steps,
-          0.1\,s apart, in one pass
-      \end{itemize}
-      \vspace{4pt}
-      {\footnotesize\pw{State and action live in one space: 3D points}\par}
+
+      {\small\bfseries Scene state}\par
+      \vspace{2pt}
+
+      {\footnotesize Observed 3D points}\par
+      \vspace{5pt}
+
+      \resizebox{!}{1cm}{%
+        \pwvisualcrop{11cm}{0.58}{0.60}{0.94}{0.76}}
+    \end{minipage}
+  };
+
+  \draw[->,thick,pw]
+    (scene.east) -- (pwmodel.north west);
+}
+
+% Input 2: proposed robot action.
+\uncover<2->{
+  \node[panel] (action) at (0,-1.45) {
+    \begin{minipage}[c][2.2cm][c]{3.6cm}
+      \centering
+
+      {\small\bfseries Robot action}\par
+      \vspace{2pt}
+
+      {\footnotesize Robot 3D point flows}\par
+      \vspace{5pt}
+
+      \resizebox{!}{1.05cm}{%
+        \pwvisualcrop{16cm}{0.65}{0.74}{0.88}{0.94}}
+    \end{minipage}
+  };
+
+  \draw[->,thick,pw]
+    (action.east) -- (pwmodel.south west);
+}
+
+% Output: predicted scene motion.
+\uncover<3->{
+  \node[panel] (outcome) at (8.4,0) {
+    \begin{minipage}[c][3.6cm][c]{3.8cm}
+      \centering
+
+      {\small\bfseries Predicted outcome}\par
+      \vspace{3pt}
+
+      {\footnotesize Full-scene 3D point flow}\par
+      \vspace{8pt}
+
+      \resizebox{3.4cm}{!}{%
+        \pwvisualcrop{7cm}{0.43}{0.08}{0.995}{0.48}}
+    \end{minipage}
+  };
+
+  \draw[->,thick,pw]
+    (pwmodel.east) -- (outcome.west);
+}
+
+\end{tikzpicture}
+
+\credit{Fig.~2, cropped; \S3.1}
+\end{frame}
+
+\begin{frame}{Contributions}
+  \vfill
+  \begin{itemize}\setlength{\itemsep}{16pt}
+    \item<1-> A large pretrained \pw{3D world model} with a shared point-flow representation of scene state and robot action.
+    \item<2-> A curated, open-source 3D interaction dataset: approximately \pw{2M trajectories and 500 hours} of real and simulated interaction.
+    \item<3-> A \pw{single pretrained checkpoint} supports diverse real-robot manipulation tasks from one RGB-D capture, without extra demonstrations or post-training.
+  \end{itemize}
+  \vfill
+  \credit{\S1, contributions}
+\end{frame}
+
+
+
+
+% Architecture walkthrough: coordinates normalized to Figure 2.
+\newcommand{\pwarchrect}[4]{%
+  \draw[orange!90!red,line width=2.8pt,rounded corners=2pt,
+    preaction={draw=white,line width=5pt}]
+    (#1,#2) rectangle (#3,#4);}
+\newcommand{\pwarchitecturefocus}[2]{%
+  \begin{tikzpicture}
+    \node[anchor=south west,inner sep=0pt] (arch) at (0,0)
+      {\includegraphics[height=#1]{figs/fig2_overview.pdf}};
+    \begin{scope}[x={(arch.south east)},y={(arch.north west)}]
+      \ifcase#2\relax
+      \or % 1: RGB-D observation.
+        \pwarchrect{0.004}{0.505}{0.414}{0.846}
+      \or % 2: Full robot-action input.
+        \pwarchrect{0.002}{0.851}{0.421}{0.997}
+        \pwarchrect{0.002}{0.251}{0.220}{0.489}
+      \or % 3: PTv3 backbone.
+        \pwarchrect{0.224}{0.012}{0.414}{0.488}
+      \or % 4: Concatenated point cloud.
+        \pwarchrect{0.427}{0.502}{0.998}{0.978}
+      \or % 5: Predicted full-scene point flow.
+        \pwarchrect{0.427}{0.014}{0.998}{0.489}
+      \or % 6: Scene points and DINOv3.
+        \pwarchrect{0.002}{0.012}{0.219}{0.245}
+      \or % 7: URDF and joint-action conversion.
+        \pwarchrect{0.002}{0.851}{0.421}{0.997}
+      \or % 8: Robot flows and time embedding.
+        \pwarchrect{0.002}{0.251}{0.220}{0.489}
+      \fi
+    \end{scope}
+    \pgfresetboundingbox
+    \path[use as bounding box]
+      (arch.south west) rectangle (arch.north east);
+  \end{tikzpicture}%
+}
+
+\begin{frame}{Architecture overview}
+  \centering
+  \paperfig{height=5.7cm}{figs/fig2_overview.pdf}{Fig.~2}
+\end{frame}
+
+
+\begin{frame}{Architecture: scene state}
+  \centering
+
+  \begin{tikzpicture}
+    \node[anchor=south west,inner sep=0pt] (arch) at (0,0)
+      {\includegraphics[height=5.7cm]{figs/fig2_overview.pdf}};
+
+    \begin{scope}[x={(arch.south east)},y={(arch.north west)}]
+      % Highlight RGB-D observation
+      \pwarchrect{0.004}{0.505}{0.414}{0.846}
+
+      % Highlight scene points + DINOv3 features
+      \pwarchrect{0.002}{0.012}{0.219}{0.245}
+    \end{scope}
+  \end{tikzpicture}
+
+  \credit{Fig.~2, highlighted; \S3.1}
+\end{frame}
+
+\begin{frame}[t]{Scene state representation: 3D points and visual features}
+\vspace{-0.3cm}
+
+{\centering\small
+  $\displaystyle
+    \mathbf s_t
+    =\{(\mathbf p_{t,i},\mathbf f_i^S)\}_{i=1}^{N_S}
+  $\par
+}
+
+\vspace{0.7cm}
+\begin{columns}[t]
+  \column{0.48\textwidth}
+  \uncover<1->{
+    {\small\bfseries\color{pw}3D positions:
+      $\mathbf p_{t,i}\in\mathbb R^3$}\par
+    \vspace{6pt}
+    \footnotesize
+    \begin{itemize}\setlength{\itemsep}{9pt}
+      \item Back-project calibrated RGB-D into a 3D scene point cloud.
+      \item $\mathbf p_{t,i}$ is point $i$'s position at time $t$;
+        $N_S$ is the number of observed scene points.
+    \end{itemize}
+  }
+
+  \column{0.48\textwidth}
+  \uncover<2->{
+    {\small\bfseries\color{pw}Visual features:
+      $\mathbf f_i^S\in\mathbb R^{D_S}$}\par
+    \vspace{6pt}
+    \footnotesize
+    \begin{itemize}\setlength{\itemsep}{9pt}
+      \item Attach features from a \textbf{frozen DINOv3 encoder}
+        at corresponding image locations.
+      \item These features provide appearance and objectness cues.
+      \item The feature vector stays fixed during the imagined rollout.
+    \end{itemize}
+  }
+\end{columns}
+\vfill
+\credit{\S3.1; \S5.1, pretrained 2D features}
+\end{frame}
+
+
+\begin{frame}{Architecture: robot action}
+  \centering
+
+  \begin{tikzpicture}
+    \node[anchor=south west,inner sep=0pt] (arch) at (0,0)
+      {\includegraphics[height=5.7cm]{figs/fig2_overview.pdf}};
+
+    \begin{scope}[x={(arch.south east)},y={(arch.north west)}]
+      % Top: URDF and proposed robot joint trajectory
+      \pwarchrect{0.002}{0.851}{0.421}{0.997}
+
+      % Bottom: robot point flows and time embeddings
+      \pwarchrect{0.002}{0.251}{0.220}{0.489}
+    \end{scope}
+  \end{tikzpicture}
+
+  \credit{Fig.~2, highlighted; \S3.1}
+\end{frame}
+
+
+
+
+\begin{frame}{Robot action representation: joints to 3D points}
+  \vspace{-5pt}
+  \[
+    \mathbf r_{t+k,j}
+    =
+    \operatorname{FK}_{\mathrm{URDF}}
+    (\mathbf q_{t+k},\mathbf u_j)
+  \]
+
+  \begin{columns}[T,onlytextwidth]
+    \column{0.49\textwidth}
+    {\small\bfseries\color{pw}Given robot geometry and motion}\par
+    \vspace{6pt}
+    \footnotesize
+    \begin{itemize}\setlength{\itemsep}{9pt}
+      \item<1-> \textbf{URDF}: robot links, joints, and geometry.
+      \item<2-> $\mathbf u_j$: a sampled surface point fixed to a robot link.
+      \item<3-> $\mathbf q_{t+k}$: proposed joint configuration at future step $k$.
+    \end{itemize}
+
+    \column{0.47\textwidth}
+    {\small\bfseries\color{pw}Construct the point-flow action}\par
+    \vspace{6pt}
+    \footnotesize
+    \begin{itemize}\setlength{\itemsep}{10pt}
+      \item<4-> Forward kinematics computes each point's future 3D position,
+        $\mathbf r_{t+k,j}$.
+      \item<4-> Repeat over the proposed trajectory.
+        In practice, sample \pw{300--500 points per gripper}.
+    \end{itemize}
   \end{columns}
-\end{frame}
-
-% 4. What the target asks for  0:45  (Fig. 3, S1; DINOv3 as objectness prior, S5.1)
-\begin{frame}{What one target asks for}
-  \centering
-  \paperfig{width=0.94\linewidth}{figs/fig3_supervision.pdf}{Fig.~3}
   \vfill
-  \begin{notes}[0.94\linewidth]
-    \item To predict where every point goes, the model has to work out what is an object,
-      what is soft or hinged, the hidden back of a box, and gravity
-    \item \pw{Training gives no object masks, material labels or physics engine: only the
-      point displacements, helped by frozen DINOv3 features}
-  \end{notes}
+  \credit{\S3.1, action representation; \S5.2}
+\end{frame}
+
+
+% ----- Architecture and prediction in one slide -----
+\begin{frame}{Architecture: predicting 3D displacement}
+  \begin{columns}[c]
+
+    \column{0.48\textwidth}
+      \centering
+      % Highlight follows the explanation.
+      \only<1>{\pwarchitecturefocus{5.0cm}{4}}
+      \only<2>{\pwarchitecturefocus{5.0cm}{3}}
+      \only<3->{\pwarchitecturefocus{5.0cm}{5}}
+
+    \column{0.48\textwidth}
+      \footnotesize
+      \begin{itemize}\setlength{\itemsep}{10pt}
+
+        \item<1-> \textbf{Combine inputs}:
+          concatenate scene points and proposed robot
+          point trajectories into one point cloud.
+
+        \item<2-> \textbf{PTv3 backbone}:
+          process the combined cloud to produce
+          learned features for each point.
+
+        \item<3-> \textbf{MLP prediction head}:
+          convert scene-point features into
+          3D displacements.
+
+      \end{itemize}
+
+    
+  \end{columns}
+  \credit{Fig.~2, highlighted; \S3.1;
+    PTv3 \citep{wu2023ptv3}}
+\end{frame}
+
+
+% ----- A distinct question: how far ahead? -----
+\begin{frame}[t]{Prediction horizon = 10 futures states at once}
+\vspace{-0.25cm}
+\small
+
+\textbf{Single-step prediction}
+\[
+  \hat{\mathbf s}_{t+1}
+  =
+  \mathcal F_\theta(\mathbf s_t,\mathbf a_t)
+\]
+{\footnotesize
+  Predict one future state, then repeat to look further ahead.
+\par}
+
+\vspace{10pt}
+
+\uncover<2->{
+  \textbf{\pw{PointWorld: chunked prediction}}
+  \[
+    \mathcal F_\theta^H
+    \big(\mathbf s_t,\mathbf a_{t:t+H-1}\big)
+    =
+    \hat{\mathbf s}_{t+1:t+H}
+  \]
+  {\footnotesize
+    Predict $H=10$ future states in one forward pass:
+    $0.1\,\mathrm{s}$ per step, covering $1\,\mathrm{s}$.
+  \par}
+}
+
+\vspace{10pt}
+
+\uncover<3->{
+  {\footnotesize\bfseries Advantages}\par
+  \begin{itemize}\setlength{\itemsep}{6pt}
+    \item \footnotesize Better temporal consistency
+      and less rollout drift.
+    \item \footnotesize One forward pass per chunk,
+      rather than repeated single-step predictions.
+  \end{itemize}
+}
+
+\vfill
+\credit{\S3.1; chunking ablation in \S5.2, Fig.~12}
+\end{frame}
+
+
+% Four successive overlays keep the equation fixed and move the highlight.
+\begin{frame}{Training objective: Huber residual}
+  \small
+  \pwequation{1}
+  \vspace{7pt}
+
+  \begin{itemize}
+    \footnotesize
+    \setlength{\itemsep}{9pt}
+
+    \item<1-> $\hat{\mathbf P}_{t+k,i}$ and $\mathbf P_{t+k,i}$: predicted and ground-truth future positions.
+
+    \item<2-> Position error equals displacement error since the initial point is shared.
+
+    \item<3-> $\rho_\delta$ is the elementwise \textbf{Huber loss}: quadratic for small residuals and linear for large ones, reducing sensitivity to noisy labels.
+
+  \end{itemize}
+
   \vfill
+  {\scriptsize\color{mute}
+    Sum over future steps $k=1,\ldots,H$ and scene points $i=1,\ldots,N_S$.
+  \par}
+  \credit{Eq.~1, \S3.1}
 \end{frame}
 
-% 5. Training loss  1:00  (Eq. 1, S3.1, Fig. 4; 1-5% from S5.1; full form in backup)
-\begin{frame}{Training loss}
+
+\begin{frame}{Training objective: emphasize moving points}
+  \vspace{-12pt}\small\setlength{\abovedisplayskip}{5pt}\setlength{\belowdisplayskip}{5pt}
+  \pwequation{2}
+  \[
+    m_{k,i}=\sigma\!\left(\kappa(\delta_{k,i}-\tau)\right),
+    \qquad
+    w_{k,i}=\frac{m_{k,i}}{\sum_{k,i}m_{k,i}}.
+  \]
+  \begin{itemize}\setlength{\itemsep}{7pt}
+    \item<1-> \footnotesize Only about \pw{1--5\%} of scene points move. An unweighted loss is dominated by static background.
+    \item<2-> $\delta_{k,i}$ is ground-truth displacement magnitude, $\tau$ a threshold, $\kappa$ the sigmoid sharpness, and $\sigma$ the logistic sigmoid.
+    \item<3-> Normalize movement likelihoods into weights, giving moving points more training signal.
+  \end{itemize}
+  \credit{Eq.~1, \S3.1; \S5.1}
+\end{frame}
+
+\begin{frame}{Training objective: uncertainty weight}
+  \small
+  \pwequation{3}
   \centering
-  \paperfig{width=0.95\linewidth, trim=0 0 0 129, clip}{figs/fig4_weighting.pdf}{Fig.~4, bottom row}
-  \vspace{2pt}
-  {\small $\displaystyle \mathcal L = \tfrac12 \sum_{k,i} w_{k,i}
-    \Big( \rho_\delta\big(\hat P_{t+k,i} - P_{t+k,i}\big)\, e^{-s_{k,i}} + s_{k,i} \Big)$\par}
-  \vspace{2pt}
-  \begin{notes}[0.86\linewidth]
-    \item Only 1--5\% of points move. $w$ shifts the loss onto them, using the true
-      displacement
-    \item Real labels are noisy. The model predicts its own log-variance $s$ per point,
-      which down-weights bad labels, and $\rho_\delta$ is a Huber loss
-    \item \pw{$s$ also picks up physics: it is largest along the edge of a dropped cloth}
+  \paperfig{width=0.76\linewidth,trim=0 0 0 129,clip}{figs/fig4_weighting.pdf}{Fig.~4, bottom row}
+  \vspace{5pt}
+  \begin{notes}[0.93\linewidth]
+    \item<1-> The network predicts a scalar log-variance $s_{k,i}$ for each point and timestep, without uncertainty labels.
+    \item<2-> Larger $s_{k,i}$ gives smaller $e^{-s_{k,i}}$, reducing the influence of unreliable residuals.
   \end{notes}
+  \credit{Eq.~1, \S3.1}
 \end{frame}
 
-% 6. Planning  0:45  (S3.2, Eq. 2, App. real-robot details)
-\begin{frame}{Planning with the model}
+
+\begin{frame}{Training objective: uncertainty regularizer}
+  \vspace{-12pt}
+  \small
+  \setlength{\abovedisplayskip}{5pt}
+  \setlength{\belowdisplayskip}{5pt}
+
+  \pwequation{4}
+  \vspace{8pt}
+
+  \footnotesize
+  \begin{itemize}\setlength{\itemsep}{11pt}
+    \item<1-> Without the $+s_{k,i}$ term, the model could suppress residual loss by making predicted uncertainty arbitrarily large.
+
+    \item<2-> The regularizer penalizes that escape, balancing residual fit against predicted uncertainty.
+
+    \item<3-> Together, Huber loss, movement weighting, and uncertainty regularization stabilize training on noisy real-world point flows.
+  \end{itemize}
+
+  \vfill
+  {\scriptsize\color{mute}
+    Points marked invisible by the annotation tracker are excluded from supervision.
+  \par}
+  \credit{Eq.~1, \S3.1; \S5.1}
+\end{frame}
+
+
+\begin{frame}{PointWorld for robotic manipulation}
+  \centering
+  \begin{tikzpicture}[
+    every node/.style={font=\footnotesize,align=center},
+    stage/.style={draw=pw,thick,text width=3.1cm,minimum height=1.15cm,inner sep=5pt}
+  ]
+    \node[stage] (obs) at (0,1.5) {\textbf{Observe scene}\\Calibrated RGB-D};
+    \uncover<2->{
+      \node[stage] (sample) at (4.2,1.5) {\textbf{Sample actions}\\Candidate paths};
+      \draw[->,thick,pw] (obs.east)--(sample.west);
+    }
+    \uncover<3->{
+      \node[stage] (pred) at (8.4,1.5) {\textbf{Predict outcomes}\\PointWorld rollouts};
+      \draw[->,thick,pw] (sample.east)--(pred.west);
+    }
+    \uncover<4->{
+      \node[stage] (score) at (8.4,-1.0) {\textbf{Score and refine}\\Favor low cost};
+      \draw[->,thick,pw] (pred.south)--(score.north);
+    }
+    \uncover<5->{
+      \node[stage] (act) at (4.2,-1.0) {\textbf{Execute plan}\\Follow chosen path};
+      \draw[->,thick,pw] (score.west)--(act.east);
+    }
+  \end{tikzpicture}
+  \vfill
+ 
+  \vspace{5pt}
+  \credit{\S3.2; real-robot appendix}
+\end{frame}
+
+
+\begin{frame}{MPPI: sampling and optimizing robot trajectories}
+
+  \begin{columns}[c]
+
+    % LEFT: Trajectory visualization
+    \column{0.43\textwidth}
+      \centering
+      \begin{tikzpicture}[x=0.72cm,y=0.72cm]
+
+        \fill[pw] (0,0) circle (3pt);
+        \node[font=\scriptsize,anchor=north]
+          at (0,-0.1) {Current pose};
+
+        % Candidate trajectories
+        \uncover<1->{
+          \draw[mute,thick]
+            (0,0)..controls(1,0.3)and(2,1.5)..(4,1.1);
+          \draw[mute,thick]
+            (0,0)..controls(1,1.6)and(3,-0.8)..(4,0.3);
+          \draw[mute,thick]
+            (0,0)..controls(1,-1.5)and(2,-1)..(4,-0.5);
+          \draw[mute,thick]
+            (0,0)..controls(1,-0.3)and(2,0.5)..(4,1.8);
+        }
+
+        % Refined nominal trajectory
+        \uncover<3->{
+          \draw[pw,very thick,->]
+            (0,0)..controls(1,0.1)and(2,0.8)..(4,1.3);
+        }
+
+        \node[font=\scriptsize,text width=4cm,
+              align=center]
+          at (2,-2) {
+            Gray: sampled trajectories\\
+            \textcolor{pw}{Teal: refined nominal trajectory}
+          };
+
+      \end{tikzpicture}
+
+    % RIGHT: Technical steps
+    \column{0.55\textwidth}
+
+      \footnotesize
+      \begin{itemize}
+        \setlength{\itemsep}{11pt}
+
+        \item<1-> \textbf{Sample trajectories:}
+          Generate $K$ candidate end-effector
+          trajectories using time-correlated
+          cubic-spline perturbations.
+
+        \item<2-> \textbf{Predict and evaluate:}
+          Convert each candidate into robot
+          point flows; use PointWorld to predict
+          scene motion and compute cost $J^{(\ell)}$.
+
+        \item<3-> \textbf{Update nominal trajectory:}
+          Weight candidates by their costs:
+      \end{itemize}
+
+      \uncover<3->{
+        \vspace{-5pt}
+        \[
+          \omega_\ell =
+          \frac{\exp(-J^{(\ell)}/\beta)}
+               {\sum_{\ell'}\exp(-J^{(\ell')}/\beta)}
+        \]
+      }
+
+  \end{columns}
+
+  \vfill
+
+
+  \credit{\S3.2; MPPI \citep{williams2017mppi}}
+\end{frame}
+
+
+
+\begin{frame}{Planning cost: task success + robot motion}
+
+  \vspace{-8pt}
   \small
   \[
-    \min_{E_{0:T}} \sum_{k=1}^{T} c_{\text{task}}(s_k) + c_{\text{ctrl}}(E_k)
-    \quad \text{s.t.}\quad s_{1:T} = F_\theta(s_0, a_{1:T})
+    \underset{\mathbf E_{0:T}}{\operatorname{arg\,min}}
+    \sum_{k=1}^{T}
+    \left[
+      \underbrace{c_{\mathrm{task}}(\mathbf s_k)}_{\text{Task cost}}
+      +
+      \underbrace{c_{\mathrm{ctrl}}(\mathbf E_k)}_{\text{Control cost}}
+    \right]
   \]
-  {\scriptsize\color{mute} $E_k$: end-effector pose\, $\cdot$\, $s_k$: predicted scene
-    points\, $\cdot$\, $a_k$: gripper points placed at $E_k$\par}
-  \vspace{8pt}
-  \begin{notes}[0.9\linewidth]
-    \item MPPI \src{williams2017mppi}: perturb a gripper path, roll each one out through
-      PointWorld, average the paths weighted by how low their cost is
-    \item The cost: move the points of a hand-drawn object mask to hand-placed targets,
-      plus a mild pull toward the object, path length and reachability
-    \item \pw{One image in, a plan 30 steps (3\,s) long out, in a few seconds}
-  \end{notes}
+
+  \vspace{6pt}
+
+  \begin{itemize}
+    \footnotesize
+    \setlength{\itemsep}{15pt}
+
+    \item<1-> \textbf{Task cost:} How close does the
+      predicted scene get to the desired target?
+      \vspace{-4pt}
+      \[
+        c_{\mathrm{task}}(\mathbf s_k)
+        =
+        \frac{1}{|\mathcal I_{\mathrm{task}}|}
+        \sum_{i\in\mathcal I_{\mathrm{task}}}
+        \|\mathbf p_{k,i}-\mathbf g_i\|_2^2
+      \]
+      {\scriptsize
+        $\mathbf p_{k,i}$: predicted point position;
+        $\mathbf g_i$: target position;
+        $\mathcal I_{\mathrm{task}}$: selected points.
+      \par}
+
+    \item<2-> \textbf{Control cost:}
+      Evaluates the end-effector trajectory
+      $\mathbf E_{0:T}$ by penalizing:
+      \begin{itemize}
+        \item Excessive travel distance between poses.
+        \item Unreachable end-effector poses.
+      \end{itemize}
+
+  \end{itemize}
+
+  \vfill
+
+
+  \credit{Eq.~2, \S3.2}
 \end{frame}
+
 
 %% ==== HANDOFF: Vivian presents S1-3 above, Juntang S4-6 below ====
 
